@@ -16,14 +16,14 @@
     "extra": {
         "tornado": {
             "name": "GitHub",
-            "core": ">=0.17",
+            "core": ">=0.21",
             "core-module": false,
             "provider": "TornadoEngine\\GitHub\\GitHubServiceProvider",
             "settings": "/administration/github",
             "needs-setup": true
         },
         "branch-alias": {
-            "dev-main": "0.1.x-dev"
+            "dev-main": "0.2.x-dev"
         }
     }
 }
