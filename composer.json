@@ -1,0 +1,28 @@
+{
+    "name": "tornado-engine/github",
+    "description": "Tornado Engine module: connect a GitHub account, and publish modules to GitHub (private or public) and Packagist.",
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4",
+        "illuminate/support": "^13.0",
+        "tornado-engine/access": ">=0.8"
+    },
+    "autoload": {
+        "psr-4": {
+            "TornadoEngine\\GitHub\\": "src/"
+        }
+    },
+    "extra": {
+        "tornado": {
+            "name": "GitHub",
+            "core": ">=0.17",
+            "core-module": false,
+            "provider": "TornadoEngine\\GitHub\\GitHubServiceProvider",
+            "settings": "/administration/github"
+        },
+        "branch-alias": {
+            "dev-main": "0.1.x-dev"
+        }
+    }
+}
