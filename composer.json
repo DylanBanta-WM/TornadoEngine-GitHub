@@ -19,7 +19,8 @@
             "core": ">=0.17",
             "core-module": false,
             "provider": "TornadoEngine\\GitHub\\GitHubServiceProvider",
-            "settings": "/administration/github"
+            "settings": "/administration/github",
+            "needs-setup": true
         },
         "branch-alias": {
             "dev-main": "0.1.x-dev"
