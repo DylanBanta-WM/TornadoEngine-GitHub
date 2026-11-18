@@ -21,7 +21,8 @@
             "core-module": false,
             "provider": "TornadoEngine\\GitHub\\GitHubServiceProvider",
             "settings": "/administration/github",
-            "needs-setup": true
+            "needs-setup": true,
+            "setup-done": "TornadoEngine\\GitHub\\GitHub@available"
         },
         "branch-alias": {
             "dev-main": "0.2.x-dev"
