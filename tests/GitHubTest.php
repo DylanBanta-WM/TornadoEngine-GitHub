@@ -11,8 +11,10 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 use TornadoEngine\Chat\Models\Conversation;
+use TornadoEngine\GitHub\GitHub;
 use TornadoEngine\GitHub\Mcp\GitHubServer;
 use TornadoEngine\GitHub\Mcp\PublishModuleTool;
 use TornadoEngine\GitHub\Publisher;
@@ -61,6 +63,7 @@ class GitHubTest extends TestCase
             return match (true) {
                 str_contains($url, 'packagist.org/api/create-package') => Http::response(['status' => 'success']),
                 $request->method() === 'GET' && str_ends_with($url, '/hooks') => Http::response([]),
+                $request->method() === 'POST' && str_ends_with($url, '/hooks') => Http::response(['id' => 42], 201),
                 $request->method() === 'GET' && str_contains($url, '/repos/') => $exists ? Http::response(['private' => true, 'html_url' => 'https://github.com/dylan/zz-publish-test', 'clone_url' => 'https://github.com/dylan/zz-publish-test.git']) : Http::response([], 404),
                 str_contains($url, '/user/repos') || str_contains($url, '/orgs/') || $request->method() === 'PATCH' => Http::response(['private' => $request['private'] ?? false, 'html_url' => 'https://github.com/dylan/zz-publish-test', 'clone_url' => 'https://github.com/dylan/zz-publish-test.git']),
                 default => Http::response([]),
@@ -74,53 +77,179 @@ class GitHubTest extends TestCase
         return array_values(array_filter($this->sent, fn ($r) => $r['method'] === $method && str_contains($r['url'], $contains)));
     }
 
+    /** GitHub's device flow; $answers are the access-token answers in order (the last one repeats). */
+    private function fakeDeviceFlow(array &$answers, bool $packagistAccepts = true): void
+    {
+        Http::fake(function (Request $request) use (&$answers, $packagistAccepts) {
+            $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data()];
+            $url = $request->url();
+
+            return match (true) {
+                str_contains($url, 'github.com/login/device/code') => Http::response(['device_code' => 'dev-1', 'user_code' => 'ABCD-1234', 'verification_uri' => 'https://github.com/login/device', 'interval' => 5, 'expires_in' => 900]),
+                str_contains($url, 'github.com/login/oauth/access_token') => Http::response(count($answers) > 1 ? array_shift($answers) : $answers[0]),
+                str_contains($url, 'api.github.com/user/orgs') => Http::response([['login' => 'westmschools']]),
+                str_contains($url, 'api.github.com/user') => Http::response(['login' => 'dylan']),
+                str_contains($url, 'packagist.org/api/create-package') => $packagistAccepts && str_contains($request->header('Authorization')[0] ?? '', 'dylan:pk-good')
+                    ? Http::response(['status' => 'error', 'message' => ['repository' => 'Missing repository']], 400)
+                    : Http::response(['status' => 'error', 'message' => 'Missing or invalid username/apiToken in request'], 403),
+                default => Http::response([], 404),
+            };
+        });
+    }
+
+    /** Polls as the page does, as if the interval had passed. */
+    private function poll(User $admin): TestResponse
+    {
+        $this->travel(11)->seconds();
+
+        return $this->actingAs($admin)->postJson('/administration/github/connect/check');
+    }
+
+    private function tokenRequests(): int
+    {
+        return count(array_filter($this->sent, fn ($r) => str_contains($r['url'], 'login/oauth/access_token')));
+    }
+
     public function test_connecting_shows_a_code_then_saves_the_account(): void
     {
         $admin = $this->admin();
-        $pending = true;
-        Http::fake([
-            'github.com/login/device/code' => Http::response(['device_code' => 'dev-1', 'user_code' => 'ABCD-1234', 'verification_uri' => 'https://github.com/login/device', 'interval' => 5, 'expires_in' => 900]),
-            'github.com/login/oauth/access_token' => function () use (&$pending) {
-                return Http::response($pending ? ['error' => 'authorization_pending'] : ['access_token' => 'gho_new']);
-            },
-            'api.github.com/user' => Http::response(['login' => 'dylan']),
-            'api.github.com/user/orgs*' => Http::response([['login' => 'westmschools']]),
-        ]);
+        $answers = [['error' => 'authorization_pending'], ['access_token' => 'gho_new', 'token_type' => 'bearer', 'scope' => 'repo']];
+        $this->fakeDeviceFlow($answers);
 
-        $this->actingAs($admin)->get('/administration/github')->assertSee('OAuth app Client ID')->assertSee('How to set up GitHub');
-        $this->actingAs($admin)->post('/administration/github/app', ['client_id' => 'Iv1.district']);
+        $this->actingAs($admin)->get('/administration/github')->assertSee('GitHub OAuth app Client ID')->assertSee('Packagist API token')->assertSee('How to set up GitHub')->assertDontSee('Connect GitHub');
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.district', 'token' => 'pk-good'])
+            ->assertRedirect('/administration/github')->assertSessionHas('github_status', 'Saved.');
         $this->assertSame('Iv1.district', Setting::get('github.client_id'));
-        $this->actingAs($admin)->get('/administration/github')->assertSee('Connect GitHub');
-        $this->actingAs($admin)->post('/administration/github/connect');
+        $this->actingAs($admin)->get('/administration/github')->assertSee('Saved.')->assertSee('Connect GitHub')->assertDontSee('pk-good');
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/connect');
         $this->actingAs($admin)->get('/administration/github')->assertSee('ABCD-1234')->assertSee('https://github.com/login/device');
 
-        $this->actingAs($admin)->postJson('/administration/github/connect/check')->assertJson(['done' => false]);
-        $pending = false;
-        $this->actingAs($admin)->postJson('/administration/github/connect/check')->assertJson(['done' => true]);
+        $this->poll($admin)->assertExactJson(['done' => false, 'interval' => 6]);
+        $this->poll($admin)->assertExactJson(['done' => true]);
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/connected')->assertRedirect('/administration/github');
 
         $this->assertSame('gho_new', Setting::getSecret('github.token'));
         $this->assertSame(['dylan', 'westmschools'], json_decode(Setting::get('github.owners'), true));
+        $this->assertSame('pk-good', Setting::getSecret('github.packagist_token'));
         $this->actingAs($admin)->get('/administration/github')->assertSee('Connected as dylan.')->assertDontSee('gho_new');
     }
 
-    public function test_packagist_details_are_only_saved_if_packagist_accepts_them(): void
+    public function test_slow_down_makes_it_wait_longer_instead_of_waiting_forever(): void
     {
         $admin = $this->admin();
-        Http::fake(['packagist.org/api/create-package' => fn (Request $r) => str_contains($r->header('Authorization')[0] ?? '', 'good')
-            ? Http::response(['status' => 'error', 'message' => ['repository' => 'Missing repository']], 400)
-            : Http::response(['status' => 'error', 'message' => 'Missing or invalid username/apiToken in request'], 403)]);
+        Setting::put('github.client_id', 'Iv1.district');
+        $answers = [['error' => 'slow_down', 'error_description' => 'Too many requests.', 'interval' => 10], ['access_token' => 'gho_new']];
+        $this->fakeDeviceFlow($answers);
+        $this->actingAs($admin)->post('/administration/github/connect');
 
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/packagist', ['username' => 'dylan', 'token' => 'bad'])->assertSessionHasErrors('packagist');
+        // Asked too soon: the website waits instead of asking GitHub.
+        $this->actingAs($admin)->postJson('/administration/github/connect/check')->assertJson(['done' => false]);
+        $this->assertSame(0, $this->tokenRequests());
+
+        $this->travel(6)->seconds();
+        $this->actingAs($admin)->postJson('/administration/github/connect/check')->assertExactJson(['done' => false, 'interval' => 11]);
+        $this->assertSame(1, $this->tokenRequests());
+
+        // The page polls at the old 5 seconds: still not asking GitHub again until the new interval has passed.
+        $this->travel(6)->seconds();
+        $this->actingAs($admin)->postJson('/administration/github/connect/check')->assertJson(['done' => false]);
+        $this->assertSame(1, $this->tokenRequests());
+
+        $this->travel(6)->seconds();
+        $this->actingAs($admin)->postJson('/administration/github/connect/check')->assertExactJson(['done' => true]);
+        $this->assertSame(2, $this->tokenRequests());
+        $this->assertSame('dylan', GitHub::login());
+    }
+
+    public function test_connecting_reports_an_expired_code(): void
+    {
+        $admin = $this->admin();
+        Setting::put('github.client_id', 'Iv1.district');
+        $answers = [['error' => 'expired_token']];
+        $this->fakeDeviceFlow($answers);
+        $this->actingAs($admin)->post('/administration/github/connect');
+
+        $this->poll($admin)->assertExactJson(['done' => true, 'error' => 'The code expired. Start again.']);
+        $this->assertFalse(GitHub::connected());
+        $this->actingAs($admin)->get('/administration/github')->assertSee('Connect GitHub');
+    }
+
+    public function test_the_page_waits_as_long_as_the_website_says(): void
+    {
+        Setting::put('github.client_id', 'Iv1.district');
+        $answers = [['error' => 'authorization_pending']];
+        $this->fakeDeviceFlow($answers);
+        $admin = $this->admin();
+        $this->actingAs($admin)->post('/administration/github/connect');
+
+        $this->actingAs($admin)->get('/administration/github')
+            ->assertSee('connect\\/check', false)->assertSee('github/connected', false)
+            ->assertSee('data.interval', false)->assertDontSee('setInterval', false);
+    }
+
+    public function test_both_settings_are_checked_and_errors_go_next_to_their_field(): void
+    {
+        $admin = $this->admin();
+        Setting::put('github.client_id', 'Iv1.good');
+        $this->connected();
+        $deviceFlow = false;
+        Http::fake([
+            'github.com/login/device/code' => function () use (&$deviceFlow) {
+                return Http::response($deviceFlow ? ['device_code' => 'x', 'user_code' => 'y', 'verification_uri' => 'z'] : ['error' => 'device_flow_disabled']);
+            },
+            'packagist.org/api/create-package' => fn (Request $r) => str_contains($r->header('Authorization')[0] ?? '', 'dylan:pk-good')
+                ? Http::response(['status' => 'error', 'message' => ['repository' => 'Missing repository']], 400)
+                : Http::response(['status' => 'error', 'message' => 'Missing or invalid username/apiToken in request'], 403),
+        ]);
+
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.bad', 'token' => 'bad'])
+            ->assertRedirect('/administration/github')
+            ->assertSessionHasErrors(['client_id' => 'Turn on Device Flow for this OAuth app on GitHub.', 'token' => 'Packagist didn\'t accept this API token for dylan.']);
+        $this->assertSame('Iv1.good', Setting::get('github.client_id'));
         $this->assertFalse(Publisher::packagistConfigured());
 
-        $this->actingAs($admin)->post('/administration/github/packagist', ['username' => 'dylan', 'token' => 'good-token']);
+        $deviceFlow = true;
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.good', 'token' => 'pk-good'])->assertSessionHasNoErrors();
         $this->assertTrue(Publisher::packagistConfigured());
+
+        // The saved token is kept when the field is left empty.
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.good', 'token' => ''])->assertSessionHasNoErrors();
+        $this->assertSame('pk-good', Setting::getSecret('github.packagist_token'));
+        $this->assertTrue(GitHub::connected());
+    }
+
+    public function test_a_token_saved_before_connecting_is_checked_with_the_github_login(): void
+    {
+        $admin = $this->admin();
+        Setting::put('github.client_id', 'Iv1.district');
+        Setting::putSecret('github.packagist_token', 'pk-wrong');
+        $answers = [['access_token' => 'gho_new']];
+        $this->fakeDeviceFlow($answers);
+        $this->actingAs($admin)->post('/administration/github/connect');
+
+        $this->poll($admin)->assertExactJson(['done' => true]);
+        $this->assertNull(Setting::getSecret('github.packagist_token'));
+        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/connected');
+        $this->actingAs($admin)->get('/administration/github')->assertSee('Packagist didn&#039;t accept this API token for dylan.', false);
+    }
+
+    public function test_set_up_needs_the_client_id_a_connected_account_and_a_packagist_token(): void
+    {
+        $this->assertFalse(GitHub::configured());
+        Setting::put('github.client_id', 'Iv1.district');
+        $this->assertFalse(GitHub::configured());
+        Setting::putSecret('github.packagist_token', 'pk-good');
+        $this->assertFalse(GitHub::configured());
+        $this->connected();
+        $this->assertTrue(GitHub::configured());
+
+        $composer = json_decode(file_get_contents(dirname(__DIR__).'/composer.json'), true);
+        $this->assertSame('TornadoEngine\\GitHub\\GitHub@configured', $composer['extra']['tornado']['setup-done']);
     }
 
     public function test_publishing_with_packagist_makes_a_public_repo_pushes_tags_and_submits(): void
     {
         $this->connected();
-        Setting::put('github.packagist_username', 'dylan');
         Setting::putSecret('github.packagist_token', 'pk-token');
         $this->fakeGitHub();
 
@@ -131,6 +260,10 @@ class GitHubTest extends TestCase
         $this->assertSame(['tornado-engine-module'], $this->sentTo('PUT', '/topics')[0]['data']['names']);
         $this->assertSame('https://packagist.org/api/github?username=dylan', $this->sentTo('POST', '/hooks')[0]['data']['config']['url']);
         $this->assertSame('https://github.com/dylan/zz-publish-test', $this->sentTo('POST', 'create-package')[0]['data']['repository']);
+        // The push came before the webhook, so GitHub sends it through the webhook once the package exists (never update-package).
+        $order = array_map(fn ($r) => $r['url'], array_filter($this->sent, fn ($r) => $r['method'] === 'POST'));
+        $this->assertSame('https://api.github.com/repos/dylan/zz-publish-test/hooks/42/tests', end($order));
+        $this->assertSame([], $this->sentTo('POST', 'update-package'));
         Process::assertRan(fn ($p) => in_array('tag', $p->command, true) && in_array('v1.0.0', $p->command, true));
         Process::assertRan(fn ($p) => in_array('push', $p->command, true) && in_array('refs/tags/v1.0.0', $p->command, true)
             && ! str_contains(implode(' ', $p->command), 'gho_secret'));
@@ -153,7 +286,7 @@ class GitHubTest extends TestCase
         $this->connected();
         $this->fakeGitHub();
 
-        $this->expectExceptionMessage('Add your Packagist username and API token first');
+        $this->expectExceptionMessage('Add your Packagist API token first');
         app(Publisher::class)->publish('zz-publish-test', 'dylan', 'packagist', '1.0.0');
     }
 

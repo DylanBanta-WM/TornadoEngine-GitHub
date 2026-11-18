@@ -3,6 +3,7 @@
 namespace TornadoEngine\GitHub;
 
 use App\Models\Setting;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
 use RuntimeException;
@@ -45,9 +46,22 @@ class Publisher
         return array_search(strtolower($package), self::localModules(), true) ?: null;
     }
 
+    /** A Packagist API token, and a connected GitHub account: Packagist accounts sign up with GitHub, so its login is the username. */
     public static function packagistConfigured(): bool
     {
-        return Setting::get('github.packagist_username') !== null && Setting::getSecret('github.packagist_token') !== null;
+        return GitHub::login() !== null && Setting::getSecret('github.packagist_token') !== null;
+    }
+
+    /**
+     * Whether Packagist accepts this username and API token (asks for a package without a repository).
+     *
+     * @throws ConnectionException when Packagist doesn't answer
+     */
+    public static function packagistAccepts(string $username, string $token): bool
+    {
+        $response = Http::withToken("{$username}:{$token}")->acceptJson()->timeout(15)->post('https://packagist.org/api/create-package', ['repository' => '']);
+
+        return $response->status() !== 403 && ! str_contains(strtolower(json_encode($response->json()) ?: ''), 'username/apitoken');
     }
 
     /**
@@ -65,7 +79,7 @@ class Publisher
             throw new RuntimeException(__('Choose private, public or packagist.'));
         }
         if ($visibility === 'packagist' && ! self::packagistConfigured()) {
-            throw new RuntimeException(__('Add your Packagist username and API token first (Administration → GitHub).'));
+            throw new RuntimeException(__('Add your Packagist API token first (Administration → GitHub).'));
         }
         $version = ltrim(trim($version), 'v');
         if (! preg_match('/^\d+\.\d+\.\d+$/', $version)) {
@@ -157,21 +171,31 @@ class Publisher
      */
     private function packagist(string $owner, string $name, string $url, string $package): string
     {
-        $username = (string) Setting::get('github.packagist_username');
+        $username = (string) GitHub::login();
         $token = (string) Setting::getSecret('github.packagist_token');
 
-        $hooks = $this->github->api()->get("/repos/{$owner}/{$name}/hooks")->json('*.config.url') ?? [];
-        if (! array_filter($hooks, fn ($hook) => str_starts_with((string) $hook, 'https://packagist.org/api/github'))) {
-            $this->github->api()->post("/repos/{$owner}/{$name}/hooks", [
+        // The webhook tells Packagist about every push from now on.
+        $hook = collect($this->github->api()->get("/repos/{$owner}/{$name}/hooks")->json() ?? [])
+            ->first(fn ($hook) => str_starts_with((string) ($hook['config']['url'] ?? ''), 'https://packagist.org/api/github'))['id'] ?? null;
+        if (! $hook) {
+            $hook = $this->github->api()->post("/repos/{$owner}/{$name}/hooks", [
                 'config' => ['url' => 'https://packagist.org/api/github?username='.rawurlencode($username), 'content_type' => 'json', 'secret' => $token],
                 'events' => ['push'],
-            ])->throw();
+            ])->throw()->json('id');
         }
 
         $response = Http::withToken("{$username}:{$token}")->acceptJson()->timeout(30)->post('https://packagist.org/api/create-package', ['repository' => $url]);
         $message = json_encode($response->json('message') ?? '');
         if (! $response->successful() && ! str_contains((string) $message, 'already exists')) {
             throw new RuntimeException(__('Packagist didn\'t take it: :reason', ['reason' => trim((string) $message, '"') ?: $response->status()]));
+        }
+
+        // The code was pushed before the webhook existed, so Packagist hasn't heard from GitHub yet and marks the
+        // package "Not Auto-Updated". GitHub's hook test sends the latest push through the webhook (signed, like any
+        // push), which reads the new version and marks it auto-updated. Never Packagist's update-package API: that
+        // marks it "Legacy Auto-Update" instead.
+        if ($hook) {
+            $this->github->api()->post("/repos/{$owner}/{$name}/hooks/{$hook}/tests");
         }
 
         return "https://packagist.org/packages/{$package}";

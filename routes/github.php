@@ -11,11 +11,11 @@ use TornadoEngine\GitHub\Mcp\GitHubServer;
 Mcp::web('/mcp/github', GitHubServer::class)->middleware([OnlyFromHarness::class, AuthenticateHarness::class]);
 
 Route::middleware(['web', 'auth', 'can:administration'])->prefix('administration/github')->name('github.')->group(function () {
-    Route::post('/app', [GitHubController::class, 'app'])->name('app');
+    Route::post('/', [GitHubController::class, 'save'])->name('save');
     Route::post('/connect', [GitHubController::class, 'connect'])->name('connect');
     Route::post('/connect/check', [GitHubController::class, 'check'])->name('check');
+    Route::post('/connected', [GitHubController::class, 'connected'])->name('connected');
     Route::post('/disconnect', [GitHubController::class, 'disconnect'])->name('disconnect');
-    Route::post('/packagist', [GitHubController::class, 'packagist'])->name('packagist');
 });
 
 Route::middleware(['web', 'auth', 'can:github.publish'])->post('/modules/publish', [GitHubController::class, 'publish'])->name('github.publish');

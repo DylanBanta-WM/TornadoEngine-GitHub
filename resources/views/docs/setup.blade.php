@@ -19,20 +19,18 @@
     </section>
 
     <section class="space-y-2">
-        <h2 class="font-semibold text-gray-900 dark:text-gray-100">{{ __('2. Connect it') }}</h2>
+        <h2 class="font-semibold text-gray-900 dark:text-gray-100">{{ __('2. Packagist') }}</h2>
         <ol class="list-decimal ps-5 space-y-1">
-            <li>{{ __('In Administration → GitHub, enter the Client ID and click Check and save.') }}</li>
-            <li>{{ __('Click Connect GitHub, open the link it shows, enter the code, and approve.') }}</li>
+            <li>{!! __('Open :link, click Log in, and choose GitHub. Use the same GitHub account as above.', ['link' => '<a href="https://packagist.org/login/" target="_blank" rel="noopener" class="'.$link.'">packagist.org</a>']) !!}</li>
+            <li>{!! __('Open :link, click Show API Token, and copy the Main API Token (not the Safe one).', ['link' => '<a href="https://packagist.org/profile/" target="_blank" rel="noopener" class="'.$link.'">'.e(__('your Packagist profile')).'</a>']) !!}</li>
         </ol>
     </section>
 
     <section class="space-y-2">
-        <h2 class="font-semibold text-gray-900 dark:text-gray-100">{{ __('3. Packagist') }}</h2>
-        <p>{{ __('Needed to share modules with other districts (Public with Packagist).') }}</p>
+        <h2 class="font-semibold text-gray-900 dark:text-gray-100">{{ __('3. Connect it') }}</h2>
         <ol class="list-decimal ps-5 space-y-1">
-            <li>{!! __('Open :link, click Log in, and choose GitHub. Use the same GitHub account as above.', ['link' => '<a href="https://packagist.org/login/" target="_blank" rel="noopener" class="'.$link.'">packagist.org</a>']) !!}</li>
-            <li>{!! __('Open :link, click Show API Token, and copy the Main API Token (not the Safe one).', ['link' => '<a href="https://packagist.org/profile/" target="_blank" rel="noopener" class="'.$link.'">'.e(__('your Packagist profile')).'</a>']) !!}</li>
-            <li>{{ __('In Administration → GitHub, enter your Packagist username and that token, then click Check and save.') }}</li>
+            <li>{{ __('In Administration → GitHub, enter the Client ID and the Packagist API token, and click Check and save.') }}</li>
+            <li>{{ __('Click Connect GitHub, open the link it shows, enter the code, and approve.') }}</li>
         </ol>
     </section>
 </div>

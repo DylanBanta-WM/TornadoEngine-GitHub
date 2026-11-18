@@ -23,10 +23,10 @@
             "provider": "TornadoEngine\\GitHub\\GitHubServiceProvider",
             "settings": "/administration/github",
             "needs-setup": true,
-            "setup-done": "TornadoEngine\\GitHub\\GitHub@available"
+            "setup-done": "TornadoEngine\\GitHub\\GitHub@configured"
         },
         "branch-alias": {
-            "dev-main": "0.2.x-dev"
+            "dev-main": "0.3.x-dev"
         }
     }
 }

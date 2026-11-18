@@ -21,6 +21,12 @@ class GitHub
         return self::clientId() !== '';
     }
 
+    /** Set up: the OAuth app, a connected account (its login is the Packagist username) and a Packagist API token. */
+    public static function configured(): bool
+    {
+        return self::available() && self::connected() && Publisher::packagistConfigured();
+    }
+
     /** The district's own GitHub OAuth app (public; device flow needs no secret). */
     public static function clientId(): string
     {
@@ -49,9 +55,11 @@ class GitHub
     }
 
     /**
-     * Checks whether the person has entered the code yet. Returns true once connected, false while waiting.
+     * Asks GitHub whether the person has entered the code yet (at most once per $interval seconds).
+     * Returns null once connected, otherwise the seconds to wait before asking again
+     * (GitHub answers "slow_down" with a longer interval when asked too soon).
      */
-    public function finishConnecting(string $deviceCode): bool
+    public function finishConnecting(string $deviceCode, int $interval): ?int
     {
         $response = Http::asForm()->acceptJson()->timeout(15)->post('https://github.com/login/oauth/access_token', [
             'client_id' => self::clientId(),
@@ -60,14 +68,19 @@ class GitHub
         ]);
 
         if ($token = $response->json('access_token')) {
+            $login = $this->api($token)->get('/user')->json('login');
+            if (! $login) {
+                throw new RuntimeException(__('GitHub didn\'t say who signed in. Start again.'));
+            }
             Setting::putSecret('github.token', $token);
-            Setting::put('github.login', $this->api()->get('/user')->throw()->json('login'));
+            Setting::put('github.login', $login);
 
-            return true;
+            return null;
         }
 
         return match ($response->json('error')) {
-            'authorization_pending', 'slow_down' => false,
+            'authorization_pending' => $interval,
+            'slow_down' => max($interval + 5, (int) $response->json('interval')),
             'expired_token' => throw new RuntimeException(__('The code expired. Start again.')),
             'access_denied' => throw new RuntimeException(__('The connection was turned down on GitHub.')),
             default => throw new RuntimeException(__('GitHub didn\'t connect: :error', ['error' => $response->json('error_description') ?? $response->json('error') ?? $response->status()])),
