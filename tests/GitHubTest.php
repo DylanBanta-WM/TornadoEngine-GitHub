@@ -54,15 +54,15 @@ class GitHubTest extends TestCase
         Setting::put('github.owners', json_encode(['dylan', 'westmschools']));
     }
 
-    private function fakeGitHub(bool $exists = false): void
+    private function fakeGitHub(bool $exists = false, array $hooks = []): void
     {
-        Http::fake(function (Request $request) use ($exists) {
-            $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data()];
+        Http::fake(function (Request $request) use ($exists, $hooks) {
+            $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data(), 'body' => $request->body()];
             $url = $request->url();
 
             return match (true) {
                 str_contains($url, 'packagist.org/api/create-package') => Http::response(['status' => 'success']),
-                $request->method() === 'GET' && str_ends_with($url, '/hooks') => Http::response([]),
+                $request->method() === 'GET' && str_ends_with($url, '/hooks') => Http::response($hooks),
                 $request->method() === 'POST' && str_ends_with($url, '/hooks') => Http::response(['id' => 42], 201),
                 $request->method() === 'GET' && str_contains($url, '/repos/') => $exists ? Http::response(['private' => true, 'html_url' => 'https://github.com/dylan/zz-publish-test', 'clone_url' => 'https://github.com/dylan/zz-publish-test.git']) : Http::response([], 404),
                 str_contains($url, '/user/repos') || str_contains($url, '/orgs/') || $request->method() === 'PATCH' => Http::response(['private' => $request['private'] ?? false, 'html_url' => 'https://github.com/dylan/zz-publish-test', 'clone_url' => 'https://github.com/dylan/zz-publish-test.git']),
@@ -81,7 +81,7 @@ class GitHubTest extends TestCase
     private function fakeDeviceFlow(array &$answers, bool $packagistAccepts = true): void
     {
         Http::fake(function (Request $request) use (&$answers, $packagistAccepts) {
-            $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data()];
+            $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data(), 'body' => $request->body()];
             $url = $request->url();
 
             return match (true) {
@@ -263,10 +263,24 @@ class GitHubTest extends TestCase
         // The push came before the webhook, so GitHub sends it through the webhook once the package exists (never update-package).
         $order = array_map(fn ($r) => $r['url'], array_filter($this->sent, fn ($r) => $r['method'] === 'POST'));
         $this->assertSame('https://api.github.com/repos/dylan/zz-publish-test/hooks/42/tests', end($order));
+        $this->assertSame('{}', $this->sentTo('POST', '/hooks/42/tests')[0]['body'], 'GitHub refuses a body of []');
         $this->assertSame([], $this->sentTo('POST', 'update-package'));
         Process::assertRan(fn ($p) => in_array('tag', $p->command, true) && in_array('v1.0.0', $p->command, true));
         Process::assertRan(fn ($p) => in_array('push', $p->command, true) && in_array('refs/tags/v1.0.0', $p->command, true)
             && ! str_contains(implode(' ', $p->command), 'gho_secret'));
+    }
+
+    public function test_a_packagist_webhook_without_the_username_is_corrected(): void
+    {
+        $this->connected();
+        Setting::putSecret('github.packagist_token', 'pk-token');
+        $this->fakeGitHub(exists: true, hooks: [['id' => 7, 'config' => ['url' => 'https://packagist.org/api/github']]]);
+
+        $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'packagist', 'version' => 'v1.0.1']);
+
+        $this->assertSame('https://packagist.org/api/github?username=dylan', $this->sentTo('PATCH', '/hooks/7')[0]['data']['config']['url']);
+        $this->assertSame([], array_filter($this->sentTo('POST', '/hooks'), fn ($r) => str_ends_with($r['url'], '/hooks')), 'no second webhook');
+        $this->assertCount(1, $this->sentTo('POST', '/hooks/7/tests'));
     }
 
     public function test_private_modules_go_to_github_only(): void

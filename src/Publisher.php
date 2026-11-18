@@ -174,14 +174,18 @@ class Publisher
         $username = (string) GitHub::login();
         $token = (string) Setting::getSecret('github.packagist_token');
 
-        // The webhook tells Packagist about every push from now on.
-        $hook = collect($this->github->api()->get("/repos/{$owner}/{$name}/hooks")->json() ?? [])
-            ->first(fn ($hook) => str_starts_with((string) ($hook['config']['url'] ?? ''), 'https://packagist.org/api/github'))['id'] ?? null;
-        if (! $hook) {
-            $hook = $this->github->api()->post("/repos/{$owner}/{$name}/hooks", [
-                'config' => ['url' => 'https://packagist.org/api/github?username='.rawurlencode($username), 'content_type' => 'json', 'secret' => $token],
-                'events' => ['push'],
-            ])->throw()->json('id');
+        // The webhook tells Packagist about every push from now on. Its address names the Packagist user (the GitHub
+        // login); one made without it (by GitHub module 0.2) gets 404 from Packagist, so it's corrected.
+        $config = ['url' => 'https://packagist.org/api/github?username='.rawurlencode($username), 'content_type' => 'json', 'secret' => $token, 'insecure_ssl' => '0'];
+        $existing = collect($this->github->api()->get("/repos/{$owner}/{$name}/hooks")->json() ?? [])
+            ->first(fn ($hook) => str_starts_with((string) ($hook['config']['url'] ?? ''), 'https://packagist.org/api/github'));
+        if ($existing) {
+            $hook = $existing['id'];
+            if (($existing['config']['url'] ?? '') !== $config['url']) {
+                $this->github->api()->patch("/repos/{$owner}/{$name}/hooks/{$hook}", ['config' => $config, 'active' => true])->throw();
+            }
+        } else {
+            $hook = $this->github->api()->post("/repos/{$owner}/{$name}/hooks", ['config' => $config, 'events' => ['push']])->throw()->json('id');
         }
 
         $response = Http::withToken("{$username}:{$token}")->acceptJson()->timeout(30)->post('https://packagist.org/api/create-package', ['repository' => $url]);
@@ -195,7 +199,8 @@ class Publisher
         // push), which reads the new version and marks it auto-updated. Never Packagist's update-package API: that
         // marks it "Legacy Auto-Update" instead.
         if ($hook) {
-            $this->github->api()->post("/repos/{$owner}/{$name}/hooks/{$hook}/tests");
+            // An empty JSON object: GitHub refuses a body of [].
+            $this->github->api()->withBody('{}', 'application/json')->post("/repos/{$owner}/{$name}/hooks/{$hook}/tests");
         }
 
         return "https://packagist.org/packages/{$package}";
