@@ -19,6 +19,7 @@
             "prompt": "The publish_module tool publishes a module to the district's GitHub (and Packagist, to share it with other districts).",
             "core": ">=0.21",
             "core-module": false,
+            "suggest": true,
             "provider": "TornadoEngine\\GitHub\\GitHubServiceProvider",
             "settings": "/administration/github",
             "needs-setup": true,
