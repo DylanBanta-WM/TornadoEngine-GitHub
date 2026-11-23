@@ -54,14 +54,16 @@ class GitHubTest extends TestCase
         Setting::put('github.owners', json_encode(['dylan', 'westmschools']));
     }
 
-    private function fakeGitHub(bool $exists = false, array $hooks = []): void
+    private function fakeGitHub(bool $exists = false, array $hooks = [], array $vendorMaintainers = []): void
     {
-        Http::fake(function (Request $request) use ($exists, $hooks) {
+        Http::fake(function (Request $request) use ($exists, $hooks, $vendorMaintainers) {
             $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data(), 'body' => $request->body()];
             $url = $request->url();
 
             return match (true) {
                 str_contains($url, 'packagist.org/api/create-package') => Http::response(['status' => 'success']),
+                str_contains($url, 'packagist.org/packages/list.json') => Http::response(['packageNames' => $vendorMaintainers ? ['westmschools/existing'] : []]),
+                str_contains($url, 'packagist.org/packages/westmschools/existing.json') => Http::response(['package' => ['maintainers' => array_map(fn ($name) => ['name' => $name], $vendorMaintainers)]]),
                 $request->method() === 'GET' && str_ends_with($url, '/hooks') => Http::response($hooks),
                 $request->method() === 'POST' && str_ends_with($url, '/hooks') => Http::response(['id' => 42], 201),
                 $request->method() === 'GET' && str_contains($url, '/repos/') => $exists ? Http::response(['private' => true, 'html_url' => 'https://github.com/dylan/zz-publish-test', 'clone_url' => 'https://github.com/dylan/zz-publish-test.git']) : Http::response([], 404),
@@ -281,6 +283,46 @@ class GitHubTest extends TestCase
         $this->assertSame('https://packagist.org/api/github?username=dylan', $this->sentTo('PATCH', '/hooks/7')[0]['data']['config']['url']);
         $this->assertSame([], array_filter($this->sentTo('POST', '/hooks'), fn ($r) => str_ends_with($r['url'], '/hooks')), 'no second webhook');
         $this->assertCount(1, $this->sentTo('POST', '/hooks/7/tests'));
+    }
+
+    public function test_official_modules_go_to_the_official_account_public_on_packagist(): void
+    {
+        file_put_contents("{$this->folder}/composer.json", json_encode(['name' => 'tornado-engine/zz-publish-test', 'description' => 'A test tool.', 'extra' => ['tornado' => ['name' => 'Publish Test', 'provider' => 'X']]]));
+        @unlink("{$this->folder}/LICENSE");
+        $this->connected();
+        Setting::putSecret('github.packagist_token', 'pk-token');
+        $this->fakeGitHub();
+
+        // Whatever owner and visibility were asked for.
+        $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'tornado-engine/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'private', 'version' => 'v1.0.0'])
+            ->assertSessionHas('modules_status');
+
+        $this->assertSame('TornadoEngine-Zz-Publish-Test', $this->sentTo('POST', '/orgs/DylanBanta-WM/repos')[0]['data']['name']);
+        $this->assertFalse($this->sentTo('POST', '/orgs/DylanBanta-WM/repos')[0]['data']['private']);
+        $this->assertSame(['tornado-engine-module', 'tornado-engine'], $this->sentTo('PUT', '/repos/DylanBanta-WM/TornadoEngine-Zz-Publish-Test/topics')[0]['data']['names']);
+        $this->assertCount(1, $this->sentTo('POST', 'create-package'));
+        $this->assertStringContainsString('Copyright (c) '.date('Y').' West Muskingum Local Schools', (string) file_get_contents("{$this->folder}/LICENSE"));
+        @unlink("{$this->folder}/LICENSE");
+    }
+
+    public function test_a_packagist_vendor_another_account_owns_is_refused_before_anything_is_made(): void
+    {
+        $this->connected();
+        Setting::putSecret('github.packagist_token', 'pk-token');
+        $this->fakeGitHub(vendorMaintainers: ['someone-else']);
+
+        $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'packagist', 'version' => 'v1.0.0'])
+            ->assertSessionHasErrors();
+        $this->assertSame([], $this->sentTo('POST', '/user/repos'), 'no repository made');
+    }
+
+    public function test_a_packagist_vendor_this_account_owns_is_fine(): void
+    {
+        $this->connected();
+        Setting::putSecret('github.packagist_token', 'pk-token');
+        $this->fakeGitHub(vendorMaintainers: ['Dylan']);
+        $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'packagist', 'version' => 'v1.0.0'])
+            ->assertSessionHas('modules_status');
     }
 
     public function test_private_modules_go_to_github_only(): void

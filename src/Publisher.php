@@ -78,9 +78,6 @@ class Publisher
         if (! array_key_exists($visibility, self::VISIBILITIES)) {
             throw new RuntimeException(__('Choose private, public or packagist.'));
         }
-        if ($visibility === 'packagist' && ! self::packagistConfigured()) {
-            throw new RuntimeException(__('Add your Packagist API token first (Administration → GitHub).'));
-        }
         $version = ltrim(trim($version), 'v');
         if (! preg_match('/^\d+\.\d+\.\d+$/', $version)) {
             throw new RuntimeException(__('The version needs to look like 1.0.0.'));
@@ -88,20 +85,87 @@ class Publisher
 
         $dir = base_path("modules/{$folder}");
         $composer = json_decode((string) file_get_contents("{$dir}/composer.json"), true);
-        $repo = $this->repository($owner, $folder, $visibility, (string) ($composer['description'] ?? ''));
+        $package = strtolower((string) ($composer['name'] ?? ''));
+        $name = $folder;
+        $topics = ['tornado-engine-module'];
+
+        // Official modules (tornado-engine/…) go to the official account, public on Packagist, named and
+        // licensed like the others. Only that account can create them, so other districts can't.
+        if (self::official($package)) {
+            $owner = (string) config('tornado.official_owner');
+            $visibility = 'packagist';
+            $name = self::officialRepository($folder);
+            $topics[] = 'tornado-engine';
+            if (! is_file("{$dir}/LICENSE")) {
+                file_put_contents("{$dir}/LICENSE", self::license());
+            }
+        }
+        if ($visibility === 'packagist') {
+            if (! self::packagistConfigured()) {
+                throw new RuntimeException(__('Add your Packagist API token first (Administration → GitHub).'));
+            }
+            $this->checkVendor($package);
+        }
+
+        $repo = $this->repository($owner, $name, $visibility, (string) ($composer['description'] ?? ''), $topics);
 
         $this->push($dir, $repo['clone_url'], $version);
 
         $packagist = null;
         if ($visibility === 'packagist') {
-            $packagist = $this->packagist($owner, $folder, $repo['html_url'], strtolower($composer['name']));
+            $packagist = $this->packagist($owner, $name, $repo['html_url'], $package);
         }
 
         return ['url' => $repo['html_url'], 'version' => $version, 'packagist' => $packagist];
     }
 
     /** Makes the repository (or updates its visibility), and gives public ones the module topic. */
-    private function repository(string $owner, string $name, string $visibility, string $description): array
+    /** The Composer vendor of official Tornado Engine modules. */
+    public const OFFICIAL_VENDOR = 'tornado-engine';
+
+    public static function official(string $package): bool
+    {
+        return str_starts_with(strtolower($package), self::OFFICIAL_VENDOR.'/');
+    }
+
+    /** access-google becomes TornadoEngine-Access-Google, like the other official repositories. */
+    public static function officialRepository(string $folder): string
+    {
+        return 'TornadoEngine-'.implode('-', array_map('ucfirst', explode('-', $folder)));
+    }
+
+    private static function license(): string
+    {
+        return "MIT License\n\nCopyright (c) ".date('Y')." West Muskingum Local Schools\n\n"
+            ."Permission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\n"
+            ."in the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+            ."copies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\n"
+            ."The above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\n"
+            ."THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+            ."FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+            ."LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n";
+    }
+
+    /**
+     * Before anything is created: a Packagist vendor belongs to whoever registered it, so publishing
+     * under someone else's (tornado-engine, say) can only fail. Says so up front.
+     */
+    private function checkVendor(string $package): void
+    {
+        $vendor = strtok($package, '/');
+        $login = strtolower((string) GitHub::login());
+        $names = Http::acceptJson()->timeout(15)->get('https://packagist.org/packages/list.json', ['vendor' => $vendor])->json('packageNames') ?? [];
+        if ($names === []) {
+            return;
+        }
+        $maintainers = Http::acceptJson()->timeout(15)->get('https://packagist.org/packages/'.$names[0].'.json')->json('package.maintainers') ?? [];
+        if ($maintainers !== [] && ! in_array($login, array_map(fn ($m) => strtolower((string) ($m['name'] ?? '')), $maintainers), true)) {
+            throw new RuntimeException(__('The Packagist vendor :vendor belongs to another account, so :login can\'t publish under it. Use your district\'s vendor name in the module\'s composer.json.', ['vendor' => $vendor, 'login' => GitHub::login()]));
+        }
+    }
+
+    /** @param  list<string>  $topics */
+    private function repository(string $owner, string $name, string $visibility, string $description, array $topics = ['tornado-engine-module']): array
     {
         $api = $this->github->api();
         $private = $visibility === 'private';
@@ -122,7 +186,7 @@ class Publisher
         }
 
         if (! $private) {
-            $api->put("/repos/{$owner}/{$name}/topics", ['names' => ['tornado-engine-module']]);
+            $api->put("/repos/{$owner}/{$name}/topics", ['names' => $topics]);
         }
 
         return $repo;

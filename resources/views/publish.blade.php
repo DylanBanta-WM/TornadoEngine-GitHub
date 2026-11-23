@@ -10,22 +10,32 @@
                 @csrf
                 <input type="hidden" name="package" value="{{ $listing->package }}">
                 @php($select = 'mt-1 block w-full min-h-11 rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 text-base focus:border-indigo-500 focus:ring-indigo-500')
-                <div>
-                    <x-input-label :for="'owner-'.$folder" :value="__('Owner')" />
-                    <select id="owner-{{ $folder }}" name="owner" class="{{ $select }}">
-                        @foreach (json_decode(\App\Models\Setting::get('github.owners') ?? 'null', true) ?: [\TornadoEngine\GitHub\GitHub::login()] as $owner)
-                            <option value="{{ $owner }}">{{ $owner }}</option>
-                        @endforeach
-                    </select>
-                </div>
-                <div>
-                    <x-input-label :for="'visibility-'.$folder" :value="__('Visibility')" />
-                    <select id="visibility-{{ $folder }}" name="visibility" class="{{ $select }}">
-                        @foreach (\TornadoEngine\GitHub\Publisher::VISIBILITIES as $value => $label)
-                            <option value="{{ $value }}" @disabled($value === 'packagist' && ! \TornadoEngine\GitHub\Publisher::packagistConfigured())>{{ __($label) }}</option>
-                        @endforeach
-                    </select>
-                </div>
+                @if (\TornadoEngine\GitHub\Publisher::official($listing->package))
+                    {{-- Official modules always go to the official account, public on Packagist. --}}
+                    <div class="sm:col-span-2 text-sm">
+                        <p class="font-medium text-gray-700 dark:text-gray-300">{{ __('Official module') }}</p>
+                        <p class="mt-1 text-gray-600 dark:text-gray-400">{{ config('tornado.official_owner') }}/{{ \TornadoEngine\GitHub\Publisher::officialRepository($folder) }} · {{ __('Public, and on Packagist') }}</p>
+                        <input type="hidden" name="owner" value="{{ config('tornado.official_owner') }}">
+                        <input type="hidden" name="visibility" value="packagist">
+                    </div>
+                @else
+                    <div>
+                        <x-input-label :for="'owner-'.$folder" :value="__('Owner')" />
+                        <select id="owner-{{ $folder }}" name="owner" class="{{ $select }}">
+                            @foreach (json_decode(\App\Models\Setting::get('github.owners') ?? 'null', true) ?: [\TornadoEngine\GitHub\GitHub::login()] as $owner)
+                                <option value="{{ $owner }}">{{ $owner }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                    <div>
+                        <x-input-label :for="'visibility-'.$folder" :value="__('Visibility')" />
+                        <select id="visibility-{{ $folder }}" name="visibility" class="{{ $select }}">
+                            @foreach (\TornadoEngine\GitHub\Publisher::VISIBILITIES as $value => $label)
+                                <option value="{{ $value }}" @disabled($value === 'packagist' && ! \TornadoEngine\GitHub\Publisher::packagistConfigured())>{{ __($label) }}</option>
+                            @endforeach
+                        </select>
+                    </div>
+                @endif
                 <div>
                     <x-input-label :for="'version-'.$folder" :value="__('Version')" />
                     <x-text-input :id="'version-'.$folder" name="version" class="mt-1 block w-full font-mono" type="text" :value="\TornadoEngine\GitHub\Publisher::nextVersion($folder)" required />
