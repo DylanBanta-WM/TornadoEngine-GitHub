@@ -31,7 +31,7 @@ class PublishModuleTool extends Tool
 
         $folder = (string) $request->get('folder', '');
         try {
-            $result = $publisher->publish($folder, (string) ($request->get('owner') ?: GitHub::login()), (string) $request->get('visibility', ''), (string) ($request->get('version') ?: Publisher::nextVersion($folder)));
+            $result = $publisher->publish($folder, (string) ($request->get('owner') ?: GitHub::login()), (string) $request->get('visibility', ''), (string) ($request->get('version') ?: Publisher::nextVersion($folder)), (string) $request->get('message', ''));
         } catch (Throwable $e) {
             return Response::error($e->getMessage());
         }
@@ -46,6 +46,7 @@ class PublishModuleTool extends Tool
             'visibility' => $schema->string()->enum(['private', 'public', 'packagist'])->required(),
             'owner' => $schema->string()->description('A GitHub account or organization; the connected account if left out.'),
             'version' => $schema->string()->description('For example 1.0.0; one after the newest tag if left out.'),
+            'message' => $schema->string()->description('One line saying what changed, for the commit.'),
         ];
     }
 }

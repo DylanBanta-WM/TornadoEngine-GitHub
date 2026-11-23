@@ -67,7 +67,7 @@ class Publisher
     /**
      * @return array{url: string, version: string, packagist: ?string}
      */
-    public function publish(string $folder, string $owner, string $visibility, string $version): array
+    public function publish(string $folder, string $owner, string $visibility, string $version, ?string $message = null): array
     {
         if (! GitHub::connected()) {
             throw new RuntimeException(__('Connect GitHub first (Administration → GitHub).'));
@@ -100,6 +100,17 @@ class Publisher
                 file_put_contents("{$dir}/LICENSE", self::license());
             }
         }
+        // A working copy of a module this site maintains goes back to the repository it was cloned from.
+        $origin = trim((string) Process::path($dir)->run(['git', 'remote', 'get-url', 'origin'])->output());
+        if (preg_match('#github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?$#', $origin, $m)) {
+            [$owner, $name] = [$m[1], $m[2]];
+            // Published as it already is: private stays private, a package on Packagist stays there.
+            $existing = $this->github->api()->get("/repos/{$owner}/{$name}");
+            if ($existing->successful()) {
+                $visibility = $existing->json('private') ? 'private'
+                    : (Http::timeout(15)->get("https://repo.packagist.org/p2/{$package}.json")->successful() ? 'packagist' : 'public');
+            }
+        }
         if ($visibility === 'packagist') {
             if (! self::packagistConfigured()) {
                 throw new RuntimeException(__('Add your Packagist API token first (Administration → GitHub).'));
@@ -109,7 +120,7 @@ class Publisher
 
         $repo = $this->repository($owner, $name, $visibility, (string) ($composer['description'] ?? ''), $topics);
 
-        $this->push($dir, $repo['clone_url'], $version);
+        $this->push($dir, $repo['clone_url'], $version, $message);
 
         $packagist = null;
         if ($visibility === 'packagist') {
@@ -193,7 +204,7 @@ class Publisher
     }
 
     /** Commits what's changed, tags the version, and pushes both. The token goes in a header, never the URL. */
-    private function push(string $dir, string $url, string $version): void
+    private function push(string $dir, string $url, string $version, ?string $message = null): void
     {
         $git = fn (array $args) => $this->git($dir, $args);
 
@@ -207,7 +218,7 @@ class Publisher
         $git(['add', '-A']);
         if (trim($git(['status', '--porcelain'])) !== '') {
             $email = GitHub::login().'@users.noreply.github.com';
-            $git(['-c', 'user.name='.GitHub::login(), '-c', "user.email={$email}", 'commit', '-q', '-m', "Version {$version}"]);
+            $git(['-c', 'user.name='.GitHub::login(), '-c', "user.email={$email}", 'commit', '-q', '-m', trim((string) $message) !== '' ? "Version {$version}: ".trim((string) $message) : "Version {$version}"]);
         }
         $git(['tag', "v{$version}"]);
 

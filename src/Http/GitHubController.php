@@ -13,6 +13,7 @@ use Illuminate\Support\ViewErrorBag;
 use RuntimeException;
 use Throwable;
 use TornadoEngine\GitHub\GitHub;
+use TornadoEngine\GitHub\Maintainer;
 use TornadoEngine\GitHub\Publisher;
 
 class GitHubController extends Controller
@@ -171,5 +172,18 @@ class GitHubController extends Controller
         }
 
         return back()->with('modules_status', __('Published version :version to :url.', ['version' => $result['version'], 'url' => $result['packagist'] ?? $result['url']]));
+    }
+
+    /** A working copy of a module this site maintains, in web/modules, linked in place of the installed one. */
+    public function workOn(Request $request, Maintainer $maintainer): RedirectResponse
+    {
+        $package = strtolower((string) $request->validate(['package' => ['required', 'string', 'max:200']])['package']);
+        try {
+            $folder = $maintainer->workOn($package);
+        } catch (RuntimeException $e) {
+            return back()->withErrors(['modules' => $e->getMessage()]);
+        }
+
+        return back()->with('modules_status', __(':package is in web/modules/:folder now, linked in place of the installed copy in a minute or two. Change it there (or in Chat), then Publish.', ['package' => $package, 'folder' => $folder]));
     }
 }

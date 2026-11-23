@@ -19,3 +19,4 @@ Route::middleware(['web', 'auth', 'can:administration'])->prefix('administration
 });
 
 Route::middleware(['web', 'auth', 'can:github.publish'])->post('/modules/publish', [GitHubController::class, 'publish'])->name('github.publish');
+Route::middleware(['web', 'auth', 'can:github.publish'])->post('/modules/work-on', [GitHubController::class, 'workOn'])->name('github.work-on');

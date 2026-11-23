@@ -16,7 +16,7 @@
     "extra": {
         "tornado": {
             "name": "GitHub",
-            "prompt": "The publish_module tool publishes a module to the district's GitHub (and Packagist, to share it with other districts).",
+            "prompt": "publish_module publishes a module to GitHub (and Packagist, to share it with other districts). work_on_module gives you a working copy of an installed module this site maintains (the connected GitHub account can push to its repository), to change it and publish a new version.",
             "core": ">=0.21",
             "core-module": false,
             "suggest": true,
@@ -26,7 +26,7 @@
             "setup-done": "TornadoEngine\\GitHub\\GitHub@configured"
         },
         "branch-alias": {
-            "dev-main": "0.4.x-dev"
+            "dev-main": "0.5.x-dev"
         }
     }
 }

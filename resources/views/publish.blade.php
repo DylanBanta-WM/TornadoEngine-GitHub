@@ -1,6 +1,21 @@
 {{-- On /modules, for modules in web/modules (made here, for example by Chat). --}}
-@php($folder = $listing->installed !== null && ! $listing->url ? \TornadoEngine\GitHub\Publisher::folderFor($listing->package) : null)
-@if ($folder && \TornadoEngine\GitHub\GitHub::connected())
+@php
+    $folder = $listing->installed !== null ? \TornadoEngine\GitHub\Publisher::folderFor($listing->package) : null;
+    // Modules this site maintains (the connected account can push to their repository) can be worked on here.
+    $maintains = $listing->installed !== null && $listing->url && \TornadoEngine\GitHub\GitHub::connected()
+        && app(\TornadoEngine\GitHub\Maintainer::class)->canPush($listing->package);
+@endphp
+@if ($maintains && ! $folder)
+    @can('github.publish')
+        <form method="POST" action="{{ route('github.work-on') }}" class="flex w-full items-center justify-end gap-3">
+            @csrf
+            <input type="hidden" name="package" value="{{ $listing->package }}">
+            <span class="text-sm text-gray-600 dark:text-gray-400">{{ __('You maintain this') }}</span>
+            <x-secondary-button type="submit">{{ __('Work on it') }}</x-secondary-button>
+        </form>
+    @endcan
+@endif
+@if ($folder && (! $listing->url || $maintains) && \TornadoEngine\GitHub\GitHub::connected())
     @can('github.publish')
         <div x-data="{ open: false }" class="w-full">
             <div class="flex justify-end">

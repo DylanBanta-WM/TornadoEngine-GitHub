@@ -15,6 +15,7 @@ use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 use TornadoEngine\Chat\Models\Conversation;
 use TornadoEngine\GitHub\GitHub;
+use TornadoEngine\GitHub\Maintainer;
 use TornadoEngine\GitHub\Mcp\GitHubServer;
 use TornadoEngine\GitHub\Mcp\PublishModuleTool;
 use TornadoEngine\GitHub\Publisher;
@@ -54,7 +55,7 @@ class GitHubTest extends TestCase
         Setting::put('github.owners', json_encode(['dylan', 'westmschools']));
     }
 
-    private function fakeGitHub(bool $exists = false, array $hooks = [], array $vendorMaintainers = []): void
+    private function fakeGitHub(bool $exists = false, array $hooks = [], array $vendorMaintainers = [], ?string $origin = null): void
     {
         Http::fake(function (Request $request) use ($exists, $hooks, $vendorMaintainers) {
             $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data(), 'body' => $request->body()];
@@ -71,7 +72,7 @@ class GitHubTest extends TestCase
                 default => Http::response([]),
             };
         });
-        Process::fake(["*'tag' '-l'*" => Process::result(''), "*'status' '--porcelain'*" => Process::result(" M src/Tool.php\n"), '*' => Process::result('')]);
+        Process::fake(["*'remote' 'get-url' 'origin'*" => Process::result($origin ?? '', '', $origin ? 0 : 2), "*'tag' '-l'*" => Process::result(''), "*'status' '--porcelain'*" => Process::result(" M src/Tool.php\n"), '*' => Process::result('')]);
     }
 
     private function sentTo(string $method, string $contains): array
@@ -323,6 +324,37 @@ class GitHubTest extends TestCase
         $this->fakeGitHub(vendorMaintainers: ['Dylan']);
         $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'packagist', 'version' => 'v1.0.0'])
             ->assertSessionHas('modules_status');
+    }
+
+    public function test_a_working_copy_goes_back_to_its_own_repository_as_it_already_is(): void
+    {
+        $this->connected();
+        Setting::putSecret('github.packagist_token', 'pk-token');
+        $this->fakeGitHub(exists: true, origin: 'https://github.com/DylanBanta-WM/TornadoEngine-Zz-Existing.git');
+        Http::fake(['repo.packagist.org/p2/*' => Http::response(['packages' => []])]);
+
+        $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'private', 'version' => 'v1.0.1']);
+
+        $this->assertSame([], $this->sentTo('POST', '/user/repos'), 'no new repository');
+        $this->assertNotEmpty($this->sentTo('GET', '/repos/DylanBanta-WM/TornadoEngine-Zz-Existing'));
+        $this->assertSame([], $this->sentTo('PATCH', '/repos/'), 'its visibility is left as it is');
+        Process::assertRan(fn ($p) => in_array('push', $p->command, true) && in_array('refs/tags/v1.0.1', $p->command, true));
+    }
+
+    public function test_only_modules_the_account_can_push_to_are_worked_on_here(): void
+    {
+        $this->connected();
+        Http::fake(['api.github.com/repos/*' => Http::response(['permissions' => ['push' => false]])]);
+
+        $this->assertFalse(app(Maintainer::class)->canPush('nobody/not-installed'));
+        $this->expectException(\RuntimeException::class);
+        app(Maintainer::class)->workOn('nobody/not-installed');
+    }
+
+    public function test_a_module_with_a_working_copy_is_worked_on_where_it_is(): void
+    {
+        $this->connected();
+        $this->assertSame('zz-publish-test', app(Maintainer::class)->workOn('westmschools/zz-publish-test'));
     }
 
     public function test_private_modules_go_to_github_only(): void
