@@ -6,6 +6,7 @@ use App\Harness\HarnessTask;
 use App\Models\Setting;
 use App\Models\User;
 use App\Modules\ModuleRegistry;
+use App\Patches\Patches;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\File;
@@ -17,6 +18,7 @@ use TornadoEngine\Chat\Models\Conversation;
 use TornadoEngine\GitHub\GitHub;
 use TornadoEngine\GitHub\Maintainer;
 use TornadoEngine\GitHub\Mcp\GitHubServer;
+use TornadoEngine\GitHub\Mcp\PatchFileTool;
 use TornadoEngine\GitHub\Mcp\PublishModuleTool;
 use TornadoEngine\GitHub\Publisher;
 
@@ -421,5 +423,29 @@ class GitHubTest extends TestCase
 
         $page = $this->actingAs($this->admin())->get('/modules')->assertOk();
         $local ? $page->assertSee('Publish') : $this->assertTrue(true);
+    }
+
+    public function test_claude_changes_core_or_a_module_through_a_patch_for_admins_only(): void
+    {
+        $base = sys_get_temp_dir().'/gh-patch-'.uniqid();
+        File::ensureDirectoryExists("{$base}/app");
+        file_put_contents("{$base}/app/Core.php", "<?php\n\nreturn 'core';\n");
+        $this->app->instance(Patches::class, new Patches($base));
+        $admin = $this->admin();
+        $conversation = Conversation::create(['user_id' => $admin->id, 'title' => 'x', 'mode' => 'auto']);
+        $task = HarnessTask::queue('chat', 'x', reference: (string) $conversation->id);
+        $task->update(['status' => 'running']);
+
+        try {
+            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/app/Core.php', 'content' => "<?php\n\nreturn 'district';\n"])
+                ->assertSee('kept the change in the patch for core');
+            $this->assertStringContainsString('district', file_get_contents("{$base}/app/Core.php"));
+            $this->assertFileExists("{$base}/local/patches/core.patch");
+
+            $conversation->update(['user_id' => User::factory()->create()->id]);
+            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/app/Core.php', 'content' => 'x'])->assertHasErrors();
+        } finally {
+            File::deleteDirectory($base);
+        }
     }
 }
