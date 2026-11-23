@@ -5,7 +5,6 @@ namespace TornadoEngine\GitHub;
 use App\Updates\UpdateJob;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Process;
 use RuntimeException;
 
 /**
@@ -34,12 +33,8 @@ class Maintainer
         }
         // A working copy in web/modules says where it came from.
         $folder = Publisher::folderFor($package);
-        $origin = $folder ? trim((string) Process::path(base_path("modules/{$folder}"))->run(['git', 'remote', 'get-url', 'origin'])->output()) : '';
-        if (preg_match('#github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?$#', $origin, $m)) {
-            return ['owner' => $m[1], 'name' => $m[2]];
-        }
 
-        return null;
+        return $folder ? Publisher::origin(base_path("modules/{$folder}")) : null;
     }
 
     /** Whether the connected account can push to the module's repository (so this site maintains it). */
@@ -81,7 +76,7 @@ class Maintainer
         File::ensureDirectoryExists(base_path('modules'));
 
         $auth = 'Authorization: Basic '.base64_encode('x-access-token:'.GitHub::token());
-        $result = Process::timeout(300)->run(['git', '-c', "http.extraHeader={$auth}", 'clone', '-q', "https://github.com/{$repo['owner']}/{$repo['name']}.git", $dir]);
+        $result = Publisher::gitRun(base_path('modules'), ['-c', "http.extraHeader={$auth}", 'clone', '-q', "https://github.com/{$repo['owner']}/{$repo['name']}.git", $dir], 300);
         if (! $result->successful()) {
             File::deleteDirectory($dir);
             // Never show the token: only GitHub's own message, without the command.

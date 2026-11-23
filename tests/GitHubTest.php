@@ -55,7 +55,7 @@ class GitHubTest extends TestCase
         Setting::put('github.owners', json_encode(['dylan', 'westmschools']));
     }
 
-    private function fakeGitHub(bool $exists = false, array $hooks = [], array $vendorMaintainers = [], ?string $origin = null): void
+    private function fakeGitHub(bool $exists = false, array $hooks = [], array $vendorMaintainers = [], ?string $origin = null, bool $rebaseFails = false): void
     {
         Http::fake(function (Request $request) use ($exists, $hooks, $vendorMaintainers) {
             $this->sent[] = ['method' => $request->method(), 'url' => $request->url(), 'data' => $request->data(), 'body' => $request->body()];
@@ -72,7 +72,7 @@ class GitHubTest extends TestCase
                 default => Http::response([]),
             };
         });
-        Process::fake(["*'remote' 'get-url' 'origin'*" => Process::result($origin ?? '', '', $origin ? 0 : 2), "*'tag' '-l'*" => Process::result(''), "*'status' '--porcelain'*" => Process::result(" M src/Tool.php\n"), '*' => Process::result('')]);
+        Process::fake(["*'remote' 'get-url' 'origin'*" => Process::result($origin ?? '', '', $origin ? 0 : 2), "*'rebase' 'origin/main'*" => Process::result('', $rebaseFails ? 'CONFLICT' : '', $rebaseFails ? 1 : 0), "*'tag' '-l'*" => Process::result(''), "*'status' '--porcelain'*" => Process::result(" M src/Tool.php\n"), '*' => Process::result('')]);
     }
 
     private function sentTo(string $method, string $contains): array
@@ -330,8 +330,8 @@ class GitHubTest extends TestCase
     {
         $this->connected();
         Setting::putSecret('github.packagist_token', 'pk-token');
+        File::ensureDirectoryExists("{$this->folder}/.git");
         $this->fakeGitHub(exists: true, origin: 'https://github.com/DylanBanta-WM/TornadoEngine-Zz-Existing.git');
-        Http::fake(['repo.packagist.org/p2/*' => Http::response(['packages' => []])]);
 
         $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'private', 'version' => 'v1.0.1']);
 
@@ -339,6 +339,23 @@ class GitHubTest extends TestCase
         $this->assertNotEmpty($this->sentTo('GET', '/repos/DylanBanta-WM/TornadoEngine-Zz-Existing'));
         $this->assertSame([], $this->sentTo('PATCH', '/repos/'), 'its visibility is left as it is');
         Process::assertRan(fn ($p) => in_array('push', $p->command, true) && in_array('refs/tags/v1.0.1', $p->command, true));
+        // On top of whatever was released since it was cloned.
+        Process::assertRan(fn ($p) => in_array('fetch', $p->command, true));
+        Process::assertRan(fn ($p) => in_array('rebase', $p->command, true) && in_array('origin/main', $p->command, true));
+        File::deleteDirectory("{$this->folder}/.git");
+    }
+
+    public function test_changes_that_clash_with_a_newer_release_are_not_published(): void
+    {
+        File::ensureDirectoryExists("{$this->folder}/.git");
+        $this->connected();
+        $this->fakeGitHub(exists: true, origin: 'https://github.com/DylanBanta-WM/TornadoEngine-Zz-Existing.git', rebaseFails: true);
+
+        $this->actingAs($this->admin())->post('/modules/publish', ['package' => 'westmschools/zz-publish-test', 'owner' => 'dylan', 'visibility' => 'public', 'version' => 'v1.0.1'])
+            ->assertSessionHasErrors();
+        Process::assertRan(fn ($p) => in_array('--abort', $p->command, true));
+        Process::assertDidntRun(fn ($p) => in_array('push', $p->command, true));
+        File::deleteDirectory("{$this->folder}/.git");
     }
 
     public function test_only_modules_the_account_can_push_to_are_worked_on_here(): void

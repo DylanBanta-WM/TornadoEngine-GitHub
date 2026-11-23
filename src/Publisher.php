@@ -3,6 +3,7 @@
 namespace TornadoEngine\GitHub;
 
 use App\Models\Setting;
+use Illuminate\Contracts\Process\ProcessResult;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Process;
@@ -101,9 +102,8 @@ class Publisher
             }
         }
         // A working copy of a module this site maintains goes back to the repository it was cloned from.
-        $origin = trim((string) Process::path($dir)->run(['git', 'remote', 'get-url', 'origin'])->output());
-        if (preg_match('#github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?$#', $origin, $m)) {
-            [$owner, $name] = [$m[1], $m[2]];
+        if ($origin = self::origin($dir)) {
+            [$owner, $name] = [$origin['owner'], $origin['name']];
             // Published as it already is: private stays private, a package on Packagist stays there.
             $existing = $this->github->api()->get("/repos/{$owner}/{$name}");
             if ($existing->successful()) {
@@ -220,18 +220,46 @@ class Publisher
             $email = GitHub::login().'@users.noreply.github.com';
             $git(['-c', 'user.name='.GitHub::login(), '-c', "user.email={$email}", 'commit', '-q', '-m', trim((string) $message) !== '' ? "Version {$version}: ".trim((string) $message) : "Version {$version}"]);
         }
-        $git(['tag', "v{$version}"]);
 
         $auth = 'Authorization: Basic '.base64_encode('x-access-token:'.GitHub::token());
+        // A working copy of a module this site maintains: its repository may have moved on since it was cloned
+        // (a release from elsewhere). These changes go on top of that; if they clash, nothing is pushed.
+        if (self::origin($dir)) {
+            $git(['-c', "http.extraHeader={$auth}", 'fetch', '-q', '--tags', 'origin']);
+            if (trim($git(['tag', '-l', "v{$version}"])) !== '') {
+                throw new RuntimeException(__('Version :version is already published. Choose a newer one.', ['version' => $version]));
+            }
+            $rebase = self::gitRun($dir, ['-c', 'user.name='.GitHub::login(), '-c', 'user.email='.GitHub::login().'@users.noreply.github.com', 'rebase', 'origin/main']);
+            if (! $rebase->successful()) {
+                self::gitRun($dir, ['rebase', '--abort']);
+                throw new RuntimeException(__('The repository has newer changes that clash with these, so nothing was published. Bring them together in web/modules (Chat can help), then publish again.'));
+            }
+        }
+        $git(['tag', "v{$version}"]);
+
         $git(['-c', "http.extraHeader={$auth}", 'push', '-q', $url, 'HEAD:refs/heads/main', "refs/tags/v{$version}"]);
+    }
+
+    /** Runs git in a module's folder (which the website's own user may not own), without throwing. */
+    public static function gitRun(string $dir, array $args, int $timeout = 120): ProcessResult
+    {
+        return Process::path($dir)
+            ->env(['GIT_CONFIG_COUNT' => '1', 'GIT_CONFIG_KEY_0' => 'safe.directory', 'GIT_CONFIG_VALUE_0' => '*', 'GIT_TERMINAL_PROMPT' => '0', 'HOME' => sys_get_temp_dir()])
+            ->timeout($timeout)
+            ->run(array_merge(['git'], $args));
+    }
+
+    /** The GitHub repository a working copy was cloned from, if it was. */
+    public static function origin(string $dir): ?array
+    {
+        $url = is_dir("{$dir}/.git") ? trim((string) self::gitRun($dir, ['remote', 'get-url', 'origin'])->output()) : '';
+
+        return preg_match('#github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?$#', $url, $m) ? ['owner' => $m[1], 'name' => $m[2]] : null;
     }
 
     private function git(string $dir, array $args): string
     {
-        $result = Process::path($dir)
-            ->env(['GIT_CONFIG_COUNT' => '1', 'GIT_CONFIG_KEY_0' => 'safe.directory', 'GIT_CONFIG_VALUE_0' => '*', 'GIT_TERMINAL_PROMPT' => '0', 'HOME' => sys_get_temp_dir()])
-            ->timeout(120)
-            ->run(array_merge(['git'], $args));
+        $result = self::gitRun($dir, $args);
 
         if (! $result->successful()) {
             // Never show the token: it's only ever in the push's header.
