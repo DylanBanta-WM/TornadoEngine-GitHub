@@ -121,22 +121,22 @@ class GitHubTest extends TestCase
         $answers = [['error' => 'authorization_pending'], ['access_token' => 'gho_new', 'token_type' => 'bearer', 'scope' => 'repo']];
         $this->fakeDeviceFlow($answers);
 
-        $this->actingAs($admin)->get('/administration/github')->assertSee('GitHub OAuth app Client ID')->assertSee('Packagist API token')->assertSee('How to set up GitHub')->assertDontSee('Connect GitHub');
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.district', 'token' => 'pk-good'])
-            ->assertRedirect('/administration/github')->assertSessionHas('github_status', 'Saved.');
+        $this->actingAs($admin)->get('/settings/github')->assertSee('GitHub OAuth app Client ID')->assertSee('Packagist API token')->assertSee('How to set up GitHub')->assertDontSee('Connect GitHub');
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github', ['client_id' => 'Iv1.district', 'token' => 'pk-good'])
+            ->assertRedirect('/settings/github')->assertSessionHas('github_status', 'Saved.');
         $this->assertSame('Iv1.district', Setting::get('github.client_id'));
-        $this->actingAs($admin)->get('/administration/github')->assertSee('Saved.')->assertSee('Connect GitHub')->assertDontSee('pk-good');
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/connect');
-        $this->actingAs($admin)->get('/administration/github')->assertSee('ABCD-1234')->assertSee('https://github.com/login/device');
+        $this->actingAs($admin)->get('/settings/github')->assertSee('Saved.')->assertSee('Connect GitHub')->assertDontSee('pk-good');
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github/connect');
+        $this->actingAs($admin)->get('/settings/github')->assertSee('ABCD-1234')->assertSee('https://github.com/login/device');
 
         $this->poll($admin)->assertExactJson(['done' => false, 'interval' => 6]);
         $this->poll($admin)->assertExactJson(['done' => true]);
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/connected')->assertRedirect('/administration/github');
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github/connected')->assertRedirect('/settings/github');
 
         $this->assertSame('gho_new', Setting::getSecret('github.token'));
         $this->assertSame(['dylan', 'westmschools'], json_decode(Setting::get('github.owners'), true));
         $this->assertSame('pk-good', Setting::getSecret('github.packagist_token'));
-        $this->actingAs($admin)->get('/administration/github')->assertSee('Connected as dylan.')->assertDontSee('gho_new');
+        $this->actingAs($admin)->get('/settings/github')->assertSee('Connected as dylan.')->assertDontSee('gho_new');
     }
 
     public function test_slow_down_makes_it_wait_longer_instead_of_waiting_forever(): void
@@ -176,7 +176,7 @@ class GitHubTest extends TestCase
 
         $this->poll($admin)->assertExactJson(['done' => true, 'error' => 'The code expired. Start again.']);
         $this->assertFalse(GitHub::connected());
-        $this->actingAs($admin)->get('/administration/github')->assertSee('Connect GitHub');
+        $this->actingAs($admin)->get('/settings/github')->assertSee('Connect GitHub');
     }
 
     public function test_the_page_waits_as_long_as_the_website_says(): void
@@ -187,7 +187,7 @@ class GitHubTest extends TestCase
         $admin = $this->admin();
         $this->actingAs($admin)->post('/administration/github/connect');
 
-        $this->actingAs($admin)->get('/administration/github')
+        $this->actingAs($admin)->get('/settings/github')
             ->assertSee('connect\\/check', false)->assertSee('github/connected', false)
             ->assertSee('data.interval', false)->assertDontSee('setInterval', false);
     }
@@ -207,18 +207,18 @@ class GitHubTest extends TestCase
                 : Http::response(['status' => 'error', 'message' => 'Missing or invalid username/apiToken in request'], 403),
         ]);
 
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.bad', 'token' => 'bad'])
-            ->assertRedirect('/administration/github')
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github', ['client_id' => 'Iv1.bad', 'token' => 'bad'])
+            ->assertRedirect('/settings/github')
             ->assertSessionHasErrors(['client_id' => 'Turn on Device Flow for this OAuth app on GitHub.', 'token' => 'Packagist didn\'t accept this API token for dylan.']);
         $this->assertSame('Iv1.good', Setting::get('github.client_id'));
         $this->assertFalse(Publisher::packagistConfigured());
 
         $deviceFlow = true;
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.good', 'token' => 'pk-good'])->assertSessionHasNoErrors();
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github', ['client_id' => 'Iv1.good', 'token' => 'pk-good'])->assertSessionHasNoErrors();
         $this->assertTrue(Publisher::packagistConfigured());
 
         // The saved token is kept when the field is left empty.
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github', ['client_id' => 'Iv1.good', 'token' => ''])->assertSessionHasNoErrors();
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github', ['client_id' => 'Iv1.good', 'token' => ''])->assertSessionHasNoErrors();
         $this->assertSame('pk-good', Setting::getSecret('github.packagist_token'));
         $this->assertTrue(GitHub::connected());
     }
@@ -234,8 +234,8 @@ class GitHubTest extends TestCase
 
         $this->poll($admin)->assertExactJson(['done' => true]);
         $this->assertNull(Setting::getSecret('github.packagist_token'));
-        $this->actingAs($admin)->from('/administration/github')->post('/administration/github/connected');
-        $this->actingAs($admin)->get('/administration/github')->assertSee('Packagist didn&#039;t accept this API token for dylan.', false);
+        $this->actingAs($admin)->from('/settings/github')->post('/administration/github/connected');
+        $this->actingAs($admin)->get('/settings/github')->assertSee('Packagist didn&#039;t accept this API token for dylan.', false);
     }
 
     public function test_set_up_needs_the_client_id_a_connected_account_and_a_packagist_token(): void
