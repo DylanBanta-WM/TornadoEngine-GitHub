@@ -15,7 +15,7 @@ use Throwable;
 use TornadoEngine\Chat\Models\Conversation;
 
 #[Name('patch_file')]
-#[Description('Changes a file of Core (/workspace/web/app, config, database, resources, routes, tests) or of an installed Tornado Engine module (/workspace/web/vendor/<vendor>/<module>/...) through the district\'s patch for it. Give the file\'s whole new content. The change is made now and kept as a patch in web/local/patches that goes back on after every update; if an update changes the same lines, the update still happens, the patch turns off and the bell says so. Use it only when an override (web/local), the module\'s extension points or a module of your own won\'t do, and for a module this site maintains use work_on_module instead.')]
+#[Description('Changes a file of an installed Tornado Engine module (/workspace/web/vendor/<vendor>/<module>/...) through the district\'s patch for it. (Core\'s own files are changed directly: the site keeps those changes across updates.) Give the file\'s whole new content. The change is made now and kept as a patch in web/local/patches that goes back on after every update; if an update changes the same lines, the update still happens, the patch turns off and the bell says so. Use it only when an override (web/local), the module\'s extension points or a module of your own won\'t do, and for a module this site maintains use work_on_module instead.')]
 class PatchFileTool extends Tool
 {
     public function handle(Request $request): Response

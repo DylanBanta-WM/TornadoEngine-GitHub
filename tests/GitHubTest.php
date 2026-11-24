@@ -425,11 +425,12 @@ class GitHubTest extends TestCase
         $local ? $page->assertSee('Publish') : $this->assertTrue(true);
     }
 
-    public function test_claude_changes_core_or_a_module_through_a_patch_for_admins_only(): void
+    public function test_claude_changes_an_installed_module_through_a_patch_for_admins_only(): void
     {
         $base = sys_get_temp_dir().'/gh-patch-'.uniqid();
-        File::ensureDirectoryExists("{$base}/app");
-        file_put_contents("{$base}/app/Core.php", "<?php\n\nreturn 'core';\n");
+        File::ensureDirectoryExists("{$base}/vendor/tornado-engine/demo/src");
+        file_put_contents("{$base}/vendor/tornado-engine/demo/composer.json", json_encode(['name' => 'tornado-engine/demo', 'extra' => ['tornado' => ['name' => 'Demo']]]));
+        file_put_contents("{$base}/vendor/tornado-engine/demo/src/A.php", "<?php\n\nreturn 'a';\n");
         $this->app->instance(Patches::class, new Patches($base));
         $admin = $this->admin();
         $conversation = Conversation::create(['user_id' => $admin->id, 'title' => 'x', 'mode' => 'auto']);
@@ -437,13 +438,15 @@ class GitHubTest extends TestCase
         $task->update(['status' => 'running']);
 
         try {
-            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/app/Core.php', 'content' => "<?php\n\nreturn 'district';\n"])
-                ->assertSee('kept the change in the patch for core');
-            $this->assertStringContainsString('district', file_get_contents("{$base}/app/Core.php"));
-            $this->assertFileExists("{$base}/local/patches/core.patch");
+            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/vendor/tornado-engine/demo/src/A.php', 'content' => "<?php\n\nreturn 'district';\n"])
+                ->assertSee('kept the change in the patch for tornado-engine/demo');
+            $this->assertFileExists("{$base}/local/patches/tornado-engine/demo.patch");
+
+            // Core is changed directly (the site keeps it across updates).
+            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/app/Core.php', 'content' => 'x'])->assertHasErrors()->assertSee('Change Core');
 
             $conversation->update(['user_id' => User::factory()->create()->id]);
-            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/app/Core.php', 'content' => 'x'])->assertHasErrors();
+            GitHubServer::tool(PatchFileTool::class, ['path' => '/workspace/web/vendor/tornado-engine/demo/src/A.php', 'content' => 'x'])->assertHasErrors();
         } finally {
             File::deleteDirectory($base);
         }
